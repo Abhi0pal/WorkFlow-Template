@@ -1,0 +1,5 @@
+{
+  "name": "DocFlow AI",
+  "description": "Intelligent document workflow for extracting and transforming text from PDF and TXT files into structured JSON templates.",
+  "requestFramePermissions": []
+}
