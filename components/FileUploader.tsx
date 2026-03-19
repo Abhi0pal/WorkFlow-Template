@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, CheckCircle2, AlertCircle, Loader2, ChevronRight, Download } from 'lucide-react';
+import { Upload, FileText, CheckCircle2, AlertCircle, Loader2, ChevronRight, Download, FileDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { extractStructuredData, transformToTemplate } from '@/lib/gemini';
+import { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, WidthType, BorderStyle } from 'docx';
+import { saveAs } from 'file-saver';
 
 interface ProcessResult {
   raw: any;
@@ -104,6 +106,194 @@ export default function FileUploader() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadMarkdown = (data: any, filename: string) => {
+    const { srs_metadata, introduction, functional_spec, non_functional_spec, system_workflow } = data;
+    
+    let md = `# ${srs_metadata.title}\n\n`;
+    md += `**Version:** ${srs_metadata.version}\n`;
+    md += `**Status:** ${srs_metadata.status}\n`;
+    md += `**Generated At:** ${new Date(srs_metadata.generated_at).toLocaleString()}\n\n`;
+    
+    md += `## 1. Introduction\n\n`;
+    md += `### 1.1 Purpose\n${introduction.purpose}\n\n`;
+    md += `### 1.2 Scope\n${introduction.scope}\n\n`;
+    
+    md += `## 2. Functional Requirements\n\n`;
+    functional_spec.requirements.forEach((req: any) => {
+      md += `- **${req.id || 'REQ'}**: ${req.description} (Priority: ${req.priority})\n`;
+    });
+    md += `\n`;
+    
+    if (functional_spec.user_stories.length > 0) {
+      md += `### 2.1 User Stories\n\n`;
+      functional_spec.user_stories.forEach((story: string) => {
+        md += `- ${story}\n`;
+      });
+      md += `\n`;
+    }
+    
+    md += `## 3. Non-Functional Requirements\n\n`;
+    non_functional_spec.requirements.forEach((req: any) => {
+      md += `- **${req.category}**: ${req.description}\n`;
+    });
+    md += `\n`;
+    
+    md += `## 4. System Workflow\n\n`;
+    md += `| Step | Actor | Action | Expected Result | Details |\n`;
+    md += `| :--- | :--- | :--- | :--- | :--- |\n`;
+    system_workflow.steps.forEach((step: any, idx: number) => {
+      md += `| ${step.step_number || idx + 1} | ${step.actor} | ${step.action} | ${step.expected_result} | ${step.details || 'N/A'} |\n`;
+    });
+    md += `\n`;
+
+    if (data.action_matrix && data.action_matrix.length > 0) {
+      md += `## 5. Action Matrix\n\n`;
+      md += `| User | Role Type | Action Allowed | Startpoint | Endpoint | SLA | Form Type ID | Jurisdiction | Conditions |\n`;
+      md += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      data.action_matrix.forEach((row: any) => {
+        md += `| ${row.user || ''} | ${row.role_type || ''} | ${row.action_allowed || ''} | ${row.startpoint || ''} | ${row.endpoint || ''} | ${row.sla || ''} | ${row.form_type_id || ''} | ${row.jurisdiction || ''} | ${row.conditions || ''} |\n`;
+      });
+      md += `\n`;
+    }
+    
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadWord = async (data: any, filename: string) => {
+    const { srs_metadata, introduction, functional_spec, non_functional_spec, system_workflow, action_matrix } = data;
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children: [
+          new Paragraph({
+            text: srs_metadata.title,
+            heading: HeadingLevel.TITLE,
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({ text: `Version: ${srs_metadata.version}`, bold: true }),
+              new TextRun({ text: `\tStatus: ${srs_metadata.status}`, bold: true }),
+            ],
+          }),
+          new Paragraph({
+            text: `Generated At: ${new Date(srs_metadata.generated_at).toLocaleString()}`,
+          }),
+          new Paragraph({ text: "", spacing: { after: 200 } }),
+
+          new Paragraph({ text: "1. Introduction", heading: HeadingLevel.HEADING_1 }),
+          new Paragraph({ text: "1.1 Purpose", heading: HeadingLevel.HEADING_2 }),
+          new Paragraph({ text: introduction.purpose }),
+          new Paragraph({ text: "1.2 Scope", heading: HeadingLevel.HEADING_2 }),
+          new Paragraph({ text: introduction.scope }),
+
+          new Paragraph({ text: "2. Functional Requirements", heading: HeadingLevel.HEADING_1 }),
+          ...functional_spec.requirements.flatMap((req: any) => [
+            new Paragraph({
+              children: [
+                new TextRun({ text: `${req.id || 'REQ'}: `, bold: true }),
+                new TextRun({ text: req.description }),
+                new TextRun({ text: ` (Priority: ${req.priority})`, italics: true }),
+              ],
+              bullet: { level: 0 }
+            })
+          ]),
+
+          ...(functional_spec.user_stories.length > 0 ? [
+            new Paragraph({ text: "2.1 User Stories", heading: HeadingLevel.HEADING_2 }),
+            ...functional_spec.user_stories.map((story: string) => 
+              new Paragraph({ text: story, bullet: { level: 0 } })
+            )
+          ] : []),
+
+          new Paragraph({ text: "3. Non-Functional Requirements", heading: HeadingLevel.HEADING_1 }),
+          ...non_functional_spec.requirements.map((req: any) => 
+            new Paragraph({
+              children: [
+                new TextRun({ text: `${req.category}: `, bold: true }),
+                new TextRun({ text: req.description }),
+              ],
+              bullet: { level: 0 }
+            })
+          ),
+
+          new Paragraph({ text: "4. System Workflow", heading: HeadingLevel.HEADING_1 }),
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Step", bold: true })] })] }),
+                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Actor", bold: true })] })] }),
+                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Action", bold: true })] })] }),
+                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Expected Result", bold: true })] })] }),
+                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Details", bold: true })] })] }),
+                ],
+              }),
+              ...system_workflow.steps.map((step: any, idx: number) => 
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph({ text: (step.step_number || idx + 1).toString() })] }),
+                    new TableCell({ children: [new Paragraph({ text: step.actor })] }),
+                    new TableCell({ children: [new Paragraph({ text: step.action })] }),
+                    new TableCell({ children: [new Paragraph({ text: step.expected_result })] }),
+                    new TableCell({ children: [new Paragraph({ text: step.details || 'N/A' })] }),
+                  ],
+                })
+              ),
+            ],
+          }),
+
+          ...(action_matrix && action_matrix.length > 0 ? [
+            new Paragraph({ text: "5. Action Matrix", heading: HeadingLevel.HEADING_1 }),
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "User", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Role Type", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Action Allowed", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Startpoint", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Endpoint", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "SLA", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Form Type ID", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Jurisdiction", bold: true })] })] }),
+                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Conditions", bold: true })] })] }),
+                  ],
+                }),
+                ...action_matrix.map((row: any) => 
+                  new TableRow({
+                    children: [
+                      new TableCell({ children: [new Paragraph({ text: row.user || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.role_type || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.action_allowed || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.startpoint || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.endpoint || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.sla || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.form_type_id || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.jurisdiction || '' })] }),
+                      new TableCell({ children: [new Paragraph({ text: row.conditions || '' })] }),
+                    ],
+                  })
+                ),
+              ],
+            }),
+          ] : []),
+        ],
+      }],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, filename);
+  };
+
   return (
     <div className="w-full max-w-4xl mx-auto space-y-8">
       {/* Upload Zone */}
@@ -201,11 +391,18 @@ export default function FileUploader() {
                 Raw JSON
               </button>
               <button 
-                onClick={() => downloadJson(result.template, 'srs_template.json')}
-                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors flex items-center gap-2"
+                onClick={() => downloadMarkdown(result.template, 'srs_document.md')}
+                className="px-4 py-2 text-sm font-medium text-zinc-600 bg-zinc-100 hover:bg-zinc-200 rounded-lg transition-colors flex items-center gap-2"
               >
                 <Download className="w-4 h-4" />
-                SRS Template
+                Markdown (.md)
+              </button>
+              <button 
+                onClick={() => downloadWord(result.template, 'srs_document.docx')}
+                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <FileDown className="w-4 h-4" />
+                Word (.docx)
               </button>
             </div>
           </div>
@@ -265,6 +462,7 @@ export default function FileUploader() {
                         <th className="px-4 py-3">Actor</th>
                         <th className="px-4 py-3">Action</th>
                         <th className="px-4 py-3">Expected Result</th>
+                        <th className="px-4 py-3">Details</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100">
@@ -274,11 +472,12 @@ export default function FileUploader() {
                           <td className="px-4 py-3 font-medium text-zinc-900">{step.actor}</td>
                           <td className="px-4 py-3 text-zinc-600">{step.action}</td>
                           <td className="px-4 py-3 text-zinc-600">{step.expected_result}</td>
+                          <td className="px-4 py-3 text-zinc-600">{step.details || 'N/A'}</td>
                         </tr>
                       ))}
                       {result.template.system_workflow.steps.length === 0 && (
                         <tr>
-                          <td colSpan={4} className="px-4 py-8 text-center text-zinc-400 italic">
+                          <td colSpan={5} className="px-4 py-8 text-center text-zinc-400 italic">
                             No workflow steps identified.
                           </td>
                         </tr>
@@ -287,6 +486,47 @@ export default function FileUploader() {
                   </table>
                 </div>
               </div>
+
+              {/* Action Matrix Table */}
+              {result.template.action_matrix && result.template.action_matrix.length > 0 && (
+                <div className="bg-white border border-zinc-200 rounded-2xl overflow-hidden shadow-sm">
+                  <div className="p-4 border-b border-zinc-100 bg-zinc-50 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold uppercase tracking-wider text-zinc-500">Action Matrix (Process Flow)</h3>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-[11px]">
+                      <thead className="bg-zinc-50 text-zinc-500 font-medium border-b border-zinc-100">
+                        <tr>
+                          <th className="px-2 py-2">User</th>
+                          <th className="px-2 py-2">Role Type</th>
+                          <th className="px-2 py-2">Action Allowed</th>
+                          <th className="px-2 py-2">Startpoint</th>
+                          <th className="px-2 py-2">Endpoint</th>
+                          <th className="px-2 py-2">SLA</th>
+                          <th className="px-2 py-2">Form Type ID</th>
+                          <th className="px-2 py-2">Jurisdiction</th>
+                          <th className="px-2 py-2">Conditions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-100">
+                        {result.template.action_matrix.map((row: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-zinc-50 transition-colors">
+                            <td className="px-2 py-2 font-medium text-zinc-900">{row.user}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.role_type}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.action_allowed}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.startpoint}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.endpoint}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.sla}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.form_type_id}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.jurisdiction}</td>
+                            <td className="px-2 py-2 text-zinc-600">{row.conditions}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* Functional Requirements */}
               <div className="bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm">

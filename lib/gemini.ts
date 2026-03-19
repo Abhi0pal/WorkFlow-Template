@@ -60,10 +60,29 @@ export const documentSchema = {
           step_number: { type: Type.INTEGER },
           action: { type: Type.STRING },
           actor: { type: Type.STRING },
-          expected_result: { type: Type.STRING }
+          expected_result: { type: Type.STRING },
+          details: { type: Type.STRING, description: "Additional details or notes about this step" }
         }
       },
       description: "Sequence of steps in the main system workflow"
+    },
+    action_matrix: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          user: { type: Type.STRING },
+          role_type: { type: Type.STRING },
+          action_allowed: { type: Type.STRING },
+          startpoint: { type: Type.STRING },
+          endpoint: { type: Type.STRING },
+          sla: { type: Type.STRING, description: "Service Level Agreement in days or hours" },
+          form_type_id: { type: Type.STRING },
+          jurisdiction: { type: Type.STRING },
+          conditions: { type: Type.STRING }
+        }
+      },
+      description: "Detailed action matrix showing roles, actions, and flow constraints"
     },
     user_stories: {
       type: Type.ARRAY,
@@ -138,6 +157,7 @@ export function transformToTemplate(extractedData: any) {
     },
     system_workflow: {
       steps: extractedData.workflow_steps || []
-    }
+    },
+    action_matrix: extractedData.action_matrix || []
   };
 }
